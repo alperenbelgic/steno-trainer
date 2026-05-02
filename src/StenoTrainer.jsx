@@ -175,7 +175,9 @@ export default function StenoTrainer(){
   const[strokeIndex,setStrokeIndex]=useState(0);
   const[showHints,setShowHints]=useState(true);
   const[showFingers,setShowFingers]=useState(true);
+  const[hideUntilWrong,setHideUntilWrong]=useState(true);
   const[fb,setFb]=useState(null);
+  const[hintRevealed,setHintRevealed]=useState(false);
   const[streak,setStreak]=useState(0);
   const[best,setBest]=useState(0);
   const[correct,setCorrect]=useState(0);
@@ -214,6 +216,7 @@ export default function StenoTrainer(){
   // everything typed from now on belongs to the new word.
   useEffect(()=>{
     setStrokeIndex(0);
+    setHintRevealed(false);
     const offset=inputRef.current?inputRef.current.value.length:0;
     wordStartOffsetRef.current=offset;
     console.log("[word change]",{
@@ -262,10 +265,11 @@ export default function StenoTrainer(){
           setCorrect(c=>c+1);
           wordStartOffsetRef.current=fullValue.length;
           console.log("[word complete]",{word:data.word,finalOutput:currentOutput});
-          setTimeout(()=>{setFb(null);advR.current();},0);
+          setTimeout(()=>{setFb(null);setHintRevealed(false);advR.current();},0);
         } else {
           // Wrong word typed — flash error, reset so they try the whole word again.
           console.log("[word wrong]",{word:data.word,normalized,expected});
+          setHintRevealed(true);
           setFb("wrong");
           setAttempts(a=>a+1);
           setStreak(0);
@@ -281,6 +285,7 @@ export default function StenoTrainer(){
         // Intermediate stroke mismatch — flag it but keep accepting strokes
         // since we can't undo what Plover already emitted.
         console.log("[stroke wrong] intermediate mismatch");
+        setHintRevealed(true);
         setFb("wrong");
         setAttempts(a=>a+1);
         setStreak(0);
@@ -330,6 +335,7 @@ export default function StenoTrainer(){
     ?curData.stenoKeys[strokeIndex]
     :null;
   const activeUni=currentStrokeKeys?getActiveUniKeys(currentStrokeKeys):new Set();
+  const showKeyboard=hintRevealed||!hideUntilWrong;
 
   const getStenoKeyColor=(sk)=>{
     const m=STENO_TO_UNI[sk];if(!m)return"var(--text-dim)";
@@ -374,42 +380,45 @@ export default function StenoTrainer(){
         <div style={{fontSize:72,fontWeight:800,letterSpacing:-2,lineHeight:1,color:fb==="correct"?"var(--success)":fb==="wrong"?"var(--error)":"var(--text)",transition:"color 0.15s",textShadow:fb==="correct"?"0 0 40px rgba(48,164,108,0.3)":fb==="wrong"?"0 0 40px rgba(229,72,77,0.3)":"none"}}>
           {(wi===0?curStr.charAt(0).toUpperCase()+curStr.slice(1):curStr)+(wi===words.length-1?".":"")}
         </div>
-        {curData.strokes.length>1&&(
-          <div style={{marginTop:8,fontSize:11,color:"var(--text-dim)",letterSpacing:1}}>
-            STROKE {Math.min(strokeIndex+1,curData.strokes.length)} OF {curData.strokes.length}
-          </div>
-        )}
-        {showHints&&(<>
-          <div style={{marginTop:10,fontSize:16,color:"var(--accent)",fontWeight:600,display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap"}}>
-            {curData.strokes.map((s,idx)=>(
-              <span key={idx} style={{
-                padding:"2px 8px",
-                borderRadius:4,
-                background:idx===strokeIndex?"var(--accent)":"transparent",
-                color:idx===strokeIndex?"#fff":idx<strokeIndex?"var(--success)":"var(--text-dim)",
-                opacity:idx<strokeIndex?0.6:1,
-                textDecoration:idx<strokeIndex?"line-through":"none",
-                border:idx===strokeIndex?"none":"1px solid var(--surface2)",
-              }}>{s}</span>
-            ))}
-          </div>
-          {currentStrokeKeys&&(
-            <div style={{marginTop:6,fontSize:14,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",justifyContent:"center"}}>
-              {currentStrokeKeys.map((sk,idx)=>{const fc=getStenoKeyColor(sk);return(<span key={idx}>{idx>0&&<span style={{margin:"0 2px",opacity:0.3}}>+</span>}<span style={{padding:"2px 8px",borderRadius:4,background:`${fc}20`,border:`2px solid ${fc}`,fontWeight:700,fontSize:13,color:fc}}>{sk}</span></span>);})}
+        <div style={{opacity:showKeyboard?1:0,transition:"opacity 0.15s",display:"flex",flexDirection:"column",alignItems:"center",gap:0}}>
+          {curData.strokes.length>1&&(
+            <div style={{marginTop:8,fontSize:11,color:"var(--text-dim)",letterSpacing:1}}>
+              STROKE {Math.min(strokeIndex+1,curData.strokes.length)} OF {curData.strokes.length}
             </div>
           )}
-        </>)}
+          <div style={{opacity:showHints?1:0,transition:"opacity 0.15s",display:"flex",flexDirection:"column",alignItems:"center",gap:0}}>
+            <div style={{marginTop:10,fontSize:16,color:"var(--accent)",fontWeight:600,display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap"}}>
+              {curData.strokes.map((s,idx)=>(
+                <span key={idx} style={{
+                  padding:"2px 8px",
+                  borderRadius:4,
+                  background:idx===strokeIndex?"var(--accent)":"transparent",
+                  color:idx===strokeIndex?"#fff":idx<strokeIndex?"var(--success)":"var(--text-dim)",
+                  opacity:idx<strokeIndex?0.6:1,
+                  textDecoration:idx<strokeIndex?"line-through":"none",
+                  border:idx===strokeIndex?"none":"1px solid var(--surface2)",
+                }}>{s}</span>
+              ))}
+            </div>
+            {currentStrokeKeys&&(
+              <div style={{marginTop:6,fontSize:14,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",justifyContent:"center"}}>
+                {currentStrokeKeys.map((sk,idx)=>{const fc=getStenoKeyColor(sk);return(<span key={idx}>{idx>0&&<span style={{margin:"0 2px",opacity:0.3}}>+</span>}<span style={{padding:"2px 8px",borderRadius:4,background:`${fc}20`,border:`2px solid ${fc}`,fontWeight:700,fontSize:13,color:fc}}>{sk}</span></span>);})}
+              </div>
+            )}
+          </div>
+        </div>
       </div>)}
 
       {!curData&&curStr&&(<div style={{marginBottom:16,textAlign:"center",minHeight:130,display:"flex",alignItems:"center"}}>
         <div style={{fontSize:20,color:"var(--error)"}}>"{curStr}" not in dictionary — Enter to skip</div>
       </div>)}
 
-      <div style={{marginBottom:20}}><UniKeyboard activeKeys={showHints?activeUni:new Set()} showFingers={showFingers}/></div>
+      <div style={{marginBottom:20,opacity:showKeyboard?1:0,transition:"opacity 0.15s"}}><UniKeyboard activeKeys={showHints?activeUni:new Set()} showFingers={showFingers}/></div>
 
       <div style={{display:"flex",gap:20,fontSize:13,color:"var(--text-dim)"}}>
         <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}><input type="checkbox" checked={showHints} onChange={e=>setShowHints(e.target.checked)} style={{accentColor:"var(--accent)"}}/>Show hints</label>
         <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}><input type="checkbox" checked={showFingers} onChange={e=>setShowFingers(e.target.checked)} style={{accentColor:"var(--accent)"}}/>Finger map</label>
+        <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}><input type="checkbox" checked={hideUntilWrong} onChange={e=>setHideUntilWrong(e.target.checked)} style={{accentColor:"var(--accent)"}}/>Hide until wrong</label>
       </div>
 
       <div style={{marginTop:12,fontSize:11,color:"var(--text-dim)",opacity:0.5}}>{SENTENCES.length} sentences · {Object.keys(WORD_MAP).length} words · Lapwing theory · Uni v4</div>
