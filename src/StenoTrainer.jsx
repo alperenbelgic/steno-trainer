@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import lapwingData from "../lapwing-base.json";
+import sentences from "../sentences.json";
 
 // Parse a steno stroke string into individual key names used by the keyboard
 // e.g. "TP-R" → ["T-", "P-", "-R"]
@@ -70,46 +71,165 @@ const WORD_MAP = buildWordMap(lapwingData);
 
 function stripWord(w) { return w.toLowerCase().replace(/[^a-z']/g, ''); }
 
-const SENTENCES = [
- "the of and to a in for is on that by this with i you it not or be are from at as your all have new more an was we will home can us about if page my has search free but our one other do no information time they site he up may what which their news out use any there see only so his when contact here business who web also now help get pm view online c e first am been would how were me s services some these click its like service x than find",
- "price date back top people had list name just over state year day into email two health n world re next used go b work last most products music buy data make them should product system post her city t add policy number such please available copyright support message after best software then jan good video well d where info rights public books high school through m each links she review years order very privacy book items company r read group sex need many user said de does set under general research university january mail full map reviews program life",
- "know games way days management p part could great united hotel real f item international center ebay must store travel comments made development report off member details line terms before hotels did send right type because local those using results office education national car design take posted internet address community within states area want phone dvd shipping reserved subject between forum family l long based w code show o even black check special prices website index being women much sign file link open today technology south case project same pages uk version section own found sports house related security both", 
-"g county american photo game members power while care network down computer systems three total place end following download h him without per access think north resources current posts big media law control water history pictures size art personal since including guide shop directory board location change white text small rating rate government children during usa return students v shopping account times sites level digital profile previous form events love old john main call hours image department title description non k y insurance another why shall property class cd still money quality every listing content country private little visit save",
+function formatDuration(seconds) {
+  if (!seconds) return "0s";
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return minutes > 0 ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
+}
 
+function debugLog(event, payload = {}) {
+  try {
+    console.log(`[steno] ${event} ${JSON.stringify(payload)}`);
+  } catch {
+    console.log(`[steno] ${event} ${String(payload)}`);
+  }
+}
 
- "the be to of and a in that have i it for not on with he as you do at this but his by from they we say her she or an will my one all would there their what so up out if about who get which go me when make can like time no just him know take people into year your good some could them see other than then now only back work because day much still may start world little here keep last home hand must each big man their get take look even want these most right down never both long same since make time just year good first give between thing need many point life again while place like great name find",
-  "Software engineering is the systematic application of engineering principles to the design, development, and maintenance of software systems. It involves understanding user requirements, creating robust architectures, and ensuring quality through rigorous testing and optimization. A key focus is on delivering scalable, efficient, and reliable solutions that meet both functional and non-functional requirements. Collaboration with cross-functional teams, including designers, product managers, and testers, is essential for successful project delivery. In an ever-evolving field, software engineers must continuously update their skills to stay ahead of emerging technologies and best practices.",
-  "it is the","you can be","he is about it","it had to be",
-  "it is on the","you and he was at","we will have this",
-  "if you can do it","who did ask for this","that was so off",
-  "from this up to that","we could have been","would you be with me",
-  "after that we did go","there should be some help",
-  "what do they also do","she was in but he was out",
-  "how can we put them all in","no one has been there before",
-  "tell me why you set it","they go to her old home",
-  "two of them are well","which one should we do",
-  "i think they will come back","then we can start a new day",
-  "you should not say more than that","let me try to use this",
-  "some people still work through the day","she may call them by name",
-  "my own way is the only way","i want to see the world",
-  "he would not let her in","they can run but not for long",
-  "you must get your work right",
-  "i know now that each one can help",
-  "take your time and keep it here","he never did go back home",
-  "both of them had a big hand in it",
-  "most people do not look back",
-  "you can find him down at the end",
-  "between you and me this is not right",
-  "get into it and never give up",
-  "just make a good point about life",
-  "i need to find the same place again",
-  "for a long time we did not know",
-  "look at the first thing you can find",
-  "since last year many good people have been here",
-  "they just need more time to make it great",
-  "while you look for a name i will think",
-  "give me one good year and i will do it",
+const COMPLETION_STORAGE_KEY = "stenoTrainer.drillCompletions.v1";
+
+function saveDrillCompletion(entry) {
+  if (typeof window === "undefined" || !window.localStorage) return;
+
+  try {
+    const existing = JSON.parse(
+      window.localStorage.getItem(COMPLETION_STORAGE_KEY) || "[]"
+    );
+    const completions = Array.isArray(existing) ? existing : [];
+    completions.push(entry);
+    window.localStorage.setItem(COMPLETION_STORAGE_KEY, JSON.stringify(completions));
+    debugLog("drill completion saved", entry);
+  } catch (error) {
+    debugLog("drill completion save failed", {message: error?.message});
+  }
+}
+
+function loadDrillCompletions() {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+
+  try {
+    const completions = JSON.parse(
+      window.localStorage.getItem(COMPLETION_STORAGE_KEY) || "[]"
+    );
+    return Array.isArray(completions) ? completions : [];
+  } catch (error) {
+    debugLog("drill completions load failed", {message: error?.message});
+    return [];
+  }
+}
+
+function getDrillStats(drillName) {
+  const completions = loadDrillCompletions().filter(
+    (entry) => entry?.drillName === drillName
+  );
+  const totalWpm = completions.reduce(
+    (total, entry) => total + (Number(entry.wpm) || 0),
+    0
+  );
+  const totalCompletionSeconds = completions.reduce(
+    (total, entry) => total + (Number(entry.elapsedSeconds) || 0),
+    0
+  );
+  const fastestWpm = completions.reduce(
+    (fastest, entry) => Math.max(fastest, Number(entry.wpm) || 0),
+    0
+  );
+  const completionSeconds = completions
+    .map((entry) => Number(entry.elapsedSeconds) || 0)
+    .filter((seconds) => seconds > 0);
+
+  return {
+    runs: completions.length,
+    averageWpm: completions.length ? Math.round(totalWpm / completions.length) : 0,
+    fastestWpm,
+    averageCompletionSeconds: completions.length
+      ? Math.round(totalCompletionSeconds / completions.length)
+      : 0,
+    fastestCompletionSeconds: completionSeconds.length
+      ? Math.min(...completionSeconds)
+      : 0,
+  };
+}
+
+function buildDrillItems(items) {
+  let sectionTitle = "";
+  return items.reduce((drills, item) => {
+    if (typeof item.title === "string") {
+      sectionTitle = item.title;
+      return drills;
+    }
+
+    if (typeof item.content !== "string") return drills;
+    drills.push({...item, sectionTitle});
+    return drills;
+  }, []);
+}
+
+const DRILL_ITEMS = buildDrillItems(sentences);
+const SENTENCES = DRILL_ITEMS.map((sentence) => sentence.content);
+const HINT_MODES = {
+  ALWAYS: "always",
+  AFTER_FAIL: "after-fail",
+  NEVER: "never",
+};
+const HINT_OPTIONS = [
+  { value: HINT_MODES.ALWAYS, label: "Always" },
+  { value: HINT_MODES.AFTER_FAIL, label: "After mistake" },
+  { value: HINT_MODES.NEVER, label: "Off" },
 ];
+
+function normalizeSentenceName(name) {
+  return name.trim().toLowerCase();
+}
+
+function getSentenceIndexByName(name) {
+  if (!name) return -1;
+  const normalizedName = normalizeSentenceName(name);
+  return DRILL_ITEMS.findIndex(
+    (sentence) =>
+      typeof sentence.name === "string" &&
+      normalizeSentenceName(sentence.name) === normalizedName
+  );
+}
+
+function getSentenceName(index) {
+  return DRILL_ITEMS[index]?.name || `Drill ${index + 1}`;
+}
+
+function getSentencePath(index) {
+  const slug = getSentenceName(index).trim().replace(/\s+/g, "_");
+  return `${import.meta.env.BASE_URL}${encodeURIComponent(slug)}`;
+}
+
+function getUrlSentenceName() {
+  if (typeof window === "undefined") return "";
+  const basePath = import.meta.env.BASE_URL;
+  const pathname = window.location.pathname;
+  const basePathWithoutTrailingSlash = basePath.replace(/\/$/, "");
+  const relativePath = pathname === basePathWithoutTrailingSlash
+    ? ""
+    : pathname.startsWith(basePath)
+    ? pathname.slice(basePath.length)
+    : pathname.replace(/^\/+/, "");
+  const segment = relativePath.split("/").filter(Boolean)[0];
+  if (!segment) return "";
+
+  try {
+    return decodeURIComponent(segment).replace(/_/g, " ");
+  } catch {
+    return segment.replace(/_/g, " ");
+  }
+}
+
+function getUrlSentenceIndex() {
+  return getSentenceIndexByName(getUrlSentenceName());
+}
+
+const INITIAL_SENTENCE_INDEX = Math.max(0, getUrlSentenceIndex());
+
+function getSentenceRawStenoMode(index) {
+  return DRILL_ITEMS[index]?.rawSteno === true;
+}
 
 const FINGER_COLORS = {
   lp:"#e06c75",lr:"#e5c07b",lm:"#61afef",li:"#c678dd",
@@ -151,7 +271,7 @@ function Key({data,active,showFingers}){
   let shadow="0 1px 0 var(--key-shadow)";
   if(active){bg=`${fc}45`;border=fc;color="var(--hl-text)";shadow=`0 2px 0 ${fc}80`;}
   return(<div style={{width:48,height:48,borderRadius:8,background:bg,border:`2px solid ${border}`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",boxShadow:showFingers?`0 2px 0 ${fc}, ${shadow}`:`${shadow}`,transition:"all 0.08s ease",cursor:"default",userSelect:"none",margin:2}}>
-    <span style={{fontSize:14,fontWeight:700,lineHeight:1,color,opacity:data.dim&&!active?0.4:1}}>{data.label}</span>
+    <span style={{fontSize:14,fontWeight:700,lineHeight:1,color,opacity:data.dim&&!active?0.4:1}}>{showFingers?data.label:null}</span>
   </div>);
 }
 
@@ -161,48 +281,126 @@ function UniKeyboard({activeKeys,showFingers}){
     {UNI_ROWS.map((row,ri)=>(<div key={ri} style={{display:"flex",gap:0}}>
       {row.map((kd,ki)=>(<Key key={`${ri}-${ki}`} data={kd} active={kd&&a.has(kd.id)} showFingers={showFingers}/>))}
     </div>))}
-    {showFingers&&(<div style={{marginTop:12,display:"flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
-      {FINGER_LABELS.map(f=>(<div key={f.id} style={{display:"flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:4,background:"var(--surface)",fontSize:10,color:"var(--text-dim)"}}>
-        <div style={{width:8,height:8,borderRadius:"50%",background:FINGER_COLORS[f.id]}}/>{f.label}
-      </div>))}
-    </div>)}
   </div>);
 }
 
 export default function StenoTrainer(){
-  const[si,setSi]=useState(0);
+  const[si,setSi]=useState(INITIAL_SENTENCE_INDEX);
   const[wi,setWi]=useState(0);
   const[strokeIndex,setStrokeIndex]=useState(0);
-  const[showHints,setShowHints]=useState(true);
+  const[hintMode,setHintMode]=useState(HINT_MODES.AFTER_FAIL);
   const[showFingers,setShowFingers]=useState(true);
-  const[hideUntilWrong,setHideUntilWrong]=useState(true);
+  const[rawStenoMode,setRawStenoMode]=useState(() => getSentenceRawStenoMode(INITIAL_SENTENCE_INDEX));
   const[fb,setFb]=useState(null);
   const[hintRevealed,setHintRevealed]=useState(false);
-  const[streak,setStreak]=useState(0);
-  const[best,setBest]=useState(0);
   const[correct,setCorrect]=useState(0);
   const[attempts,setAttempts]=useState(0);
-  const[showList,setShowList]=useState(false);
+  const[sessionStarted,setSessionStarted]=useState(false);
+  const[elapsedSeconds,setElapsedSeconds]=useState(0);
+  const[showDrills,setShowDrills]=useState(true);
+  const[showConfig,setShowConfig]=useState(true);
+  const[showStats,setShowStats]=useState(false);
+  const[statsRefresh,setStatsRefresh]=useState(0);
   const inputRef=useRef(null);
   const fbRef=useRef(null);
   const settleRef=useRef(null);
   const wordStartOffsetRef=useRef(0);
+  const strokeIndexRef=useRef(0);
+  const pendingAdvanceRef=useRef(false);
+  const pointerDownRef=useRef(false);
+  const sessionStartRef=useRef(null);
+  const correctRef=useRef(0);
+  const attemptsRef=useRef(0);
+  const sentenceIndexRef=useRef(INITIAL_SENTENCE_INDEX);
+  const wordIndexRef=useRef(0);
+  const wordsLengthRef=useRef(0);
+  const renderCountRef=useRef(0);
+  renderCountRef.current+=1;
 
   const sentence=SENTENCES[si]||SENTENCES[0];
   const words=sentence.split(" ");
-  const curStr=words[wi];
-  const curData=WORD_MAP[stripWord(curStr)];
+  sentenceIndexRef.current=si;
+  wordIndexRef.current=wi;
+  wordsLengthRef.current=words.length;
+  const sentenceComplete=wi>=words.length;
+  const curStr=sentenceComplete?"":words[wi];
+  const curData=curStr
+    ? rawStenoMode
+      ? {word:curStr,strokes:[curStr],stenoKeys:[parseStroke(curStr)],cumulativePrefixOutputs:[curStr]}
+      : WORD_MAP[stripWord(curStr)]
+    : null;
 
   // Keep latest curData accessible inside debounced callback without stale closure.
   const curDataRef=useRef(curData);
   useEffect(()=>{curDataRef.current=curData;},[curData]);
 
+  useEffect(()=>{
+    debugLog("render",{
+      count:renderCountRef.current,
+      sentenceIndex:si,
+      sentenceName:getSentenceName(si),
+      wordIndex:wi,
+      word:curStr,
+      rawStenoMode,
+      hintMode,
+          showDrills,
+          showConfig,
+          showStats,
+          statsRefresh,
+          sentenceComplete,
+          sessionStarted,
+          elapsedSeconds,
+    });
+  });
+
+  useEffect(()=>{
+    setRawStenoMode(getSentenceRawStenoMode(si));
+  },[si]);
+
+  useEffect(()=>{
+    if(!sessionStarted||!sessionStartRef.current)return;
+
+    const updateElapsed=()=>{
+      setElapsedSeconds(Math.floor((Date.now()-sessionStartRef.current)/1000));
+    };
+
+    updateElapsed();
+    if(sentenceComplete)return;
+
+    const timer=setInterval(updateElapsed,1000);
+    return()=>clearInterval(timer);
+  },[sessionStarted,sentenceComplete]);
+
+  useEffect(()=>{
+    const handlePopState=()=>{
+      const index=getUrlSentenceIndex();
+      if(index===-1)return;
+      setSi(index);
+      setWi(0);
+      setCorrect(0);
+      setAttempts(0);
+      correctRef.current=0;
+      attemptsRef.current=0;
+      setSessionStarted(false);
+      setElapsedSeconds(0);
+      sessionStartRef.current=null;
+      setFb(null);
+      if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;
+    };
+    window.addEventListener("popstate",handlePopState);
+    return()=>window.removeEventListener("popstate",handlePopState);
+  },[]);
+
   const advance=useCallback(()=>{
     setWi(prev=>{
       if(prev+1>=sentence.split(" ").length){
-        console.log("[advance] end of sentence -> next sentence");
-        setSi(s=>(s+1)%SENTENCES.length);
-        return 0;
+        debugLog("advance",{
+          reason:"sentence complete",
+          sentenceIndex:si,
+          sentenceName:getSentenceName(si),
+        });
+        pendingAdvanceRef.current=false;
+        return sentence.split(" ").length;
       }
       return prev+1;
     });
@@ -215,11 +413,13 @@ export default function StenoTrainer(){
   // Instead we move the offset to the current end of the input value;
   // everything typed from now on belongs to the new word.
   useEffect(()=>{
+    strokeIndexRef.current=0;
     setStrokeIndex(0);
     setHintRevealed(false);
+    pendingAdvanceRef.current=false;
     const offset=inputRef.current?inputRef.current.value.length:0;
     wordStartOffsetRef.current=offset;
-    console.log("[word change]",{
+    debugLog("word change",{
       sentenceIndex:si,
       wordIndex:wi,
       word:curStr,
@@ -234,70 +434,114 @@ export default function StenoTrainer(){
   // the keystrokes for a single chord.
   const evaluateStroke=useCallback(()=>{
     if(!inputRef.current)return;
+    if(pendingAdvanceRef.current)return;
     const data=curDataRef.current;
-    if(!data){console.log("[stroke] no data for current word, ignoring");return;}
+    if(!data){debugLog("stroke", {reason:"no data for current word"});return;}
     const fullValue=inputRef.current.value;
     const currentOutput=fullValue.substring(wordStartOffsetRef.current);
 
-    setStrokeIndex(prev=>{
-      const isLast=prev>=data.strokes.length-1;
-      const expected=data.cumulativePrefixOutputs[prev];
-      const normalized=currentOutput.trim().toLowerCase();
-      const matches=expected==null?true:normalized===expected.toLowerCase();
+    const prev=strokeIndexRef.current;
+    const isLast=prev>=data.strokes.length-1;
+    const expected=data.cumulativePrefixOutputs[prev];
+    const normalized=currentOutput.trim().toLowerCase();
+    const matches=expected==null?true:normalized===expected.toLowerCase();
 
-      console.log("[stroke]",{
-        word:data.word,
-        strokeIndex:prev,
-        stroke:data.strokes[prev],
-        currentOutput,
-        normalized,
-        expected,
-        matches,
-        isLast,
-        offset:wordStartOffsetRef.current,
-      });
+    debugLog("stroke",{
+      word:data.word,
+      strokeIndex:prev,
+      stroke:data.strokes[prev],
+      currentOutput,
+      normalized,
+      expected,
+      matches,
+      isLast,
+      offset:wordStartOffsetRef.current,
+    });
 
-      if(isLast){
-        if(matches){
-          setFb("correct");
-          setAttempts(a=>a+1);
-          setStreak(s=>{const n=s+1;setBest(b=>Math.max(b,n));return n;});
-          setCorrect(c=>c+1);
-          wordStartOffsetRef.current=fullValue.length;
-          console.log("[word complete]",{word:data.word,finalOutput:currentOutput});
-          setTimeout(()=>{setFb(null);setHintRevealed(false);advR.current();},0);
-        } else {
-          // Wrong word typed — flash error, reset so they try the whole word again.
-          console.log("[word wrong]",{word:data.word,normalized,expected});
-          setHintRevealed(true);
-          setFb("wrong");
-          setAttempts(a=>a+1);
-          setStreak(0);
-          if(fbRef.current)clearTimeout(fbRef.current);
-          fbRef.current=setTimeout(()=>setFb(null),400);
-          // Move offset forward so next attempt isn't confused by previous output.
-          wordStartOffsetRef.current=fullValue.length;
+    if(isLast){
+      if(matches){
+        pendingAdvanceRef.current=true; // synchronous — blocks any re-entrant calls
+        const nextAttempts=attemptsRef.current+1;
+        const nextCorrect=correctRef.current+1;
+        attemptsRef.current=nextAttempts;
+        correctRef.current=nextCorrect;
+        setFb("correct");
+        setAttempts(nextAttempts);
+        setCorrect(nextCorrect);
+        wordStartOffsetRef.current=fullValue.length;
+        strokeIndexRef.current=0;
+        setStrokeIndex(0);
+        debugLog("word complete",{word:data.word,finalOutput:currentOutput});
+        if(wordIndexRef.current+1>=wordsLengthRef.current){
+          const drillIndex=sentenceIndexRef.current;
+          const elapsed=sessionStartRef.current
+            ?Math.floor((Date.now()-sessionStartRef.current)/1000)
+            :0;
+          const accuracy=nextAttempts>0?Math.round(nextCorrect/nextAttempts*100):0;
+          const completedWords=wordsLengthRef.current;
+          const completionWpm=elapsed>0?Math.round(completedWords/(elapsed/60)):0;
+          saveDrillCompletion({
+            drillName:getSentenceName(drillIndex),
+            sectionTitle:DRILL_ITEMS[drillIndex]?.sectionTitle || "",
+            completedAt:new Date().toISOString(),
+            elapsedSeconds:elapsed,
+            wpm:completionWpm,
+            accuracy,
+            correct:nextCorrect,
+            attempts:nextAttempts,
+            completedWords,
+            rawSteno:DRILL_ITEMS[drillIndex]?.rawSteno === true,
+          });
+          setStatsRefresh(v=>v+1);
         }
-        return 0; // reset stroke index regardless
-      }
-
-      if(!matches){
-        // Intermediate stroke mismatch — flag it but keep accepting strokes
-        // since we can't undo what Plover already emitted.
-        console.log("[stroke wrong] intermediate mismatch");
+        setTimeout(()=>{setFb(null);setHintRevealed(false);advR.current();},0);
+      } else {
+        // Wrong word typed — flash error, reset so they try the whole word again.
+        const nextAttempts=attemptsRef.current+1;
+        attemptsRef.current=nextAttempts;
+        debugLog("word wrong",{word:data.word,normalized,expected});
         setHintRevealed(true);
         setFb("wrong");
-        setAttempts(a=>a+1);
-        setStreak(0);
+        setAttempts(nextAttempts);
         if(fbRef.current)clearTimeout(fbRef.current);
-        fbRef.current=setTimeout(()=>setFb(null),300);
+        fbRef.current=setTimeout(()=>setFb(null),400);
+        wordStartOffsetRef.current=fullValue.length;
+        strokeIndexRef.current=0;
+        setStrokeIndex(0);
       }
-      return prev+1;
-    });
+      return;
+    }
+
+    if(!matches){
+      // Intermediate stroke mismatch — flag it but keep accepting strokes
+      // since we can't undo what Plover already emitted.
+      debugLog("stroke wrong",{reason:"intermediate mismatch"});
+      const nextAttempts=attemptsRef.current+1;
+      attemptsRef.current=nextAttempts;
+      setHintRevealed(true);
+      setFb("wrong");
+      setAttempts(nextAttempts);
+      if(fbRef.current)clearTimeout(fbRef.current);
+      fbRef.current=setTimeout(()=>setFb(null),300);
+    }
+    strokeIndexRef.current=prev+1;
+    setStrokeIndex(prev+1);
   },[]);
 
+  const startSession=useCallback(()=>{
+    if(sessionStartRef.current||sentenceComplete)return;
+    sessionStartRef.current=Date.now();
+    setElapsedSeconds(0);
+    setSessionStarted(true);
+    debugLog("session start",{
+      sentenceIndex:si,
+      sentenceName:getSentenceName(si),
+    });
+  },[sentenceComplete,si]);
+
   const handleInput=useCallback((e)=>{
-    console.log("[input]",{
+    startSession();
+    debugLog("input",{
       value:e.target.value,
       length:e.target.value.length,
       offset:wordStartOffsetRef.current,
@@ -306,7 +550,7 @@ export default function StenoTrainer(){
     // Coalesce the keystroke burst Plover emits per chord into one stroke event.
     if(settleRef.current)clearTimeout(settleRef.current);
     settleRef.current=setTimeout(()=>evaluateStroke(),50);
-  },[evaluateStroke]);
+  },[evaluateStroke,startSession]);
 
   useEffect(()=>{
     const h=(e)=>{
@@ -318,7 +562,7 @@ export default function StenoTrainer(){
         // Move offset past whatever's currently in the field so next word
         // starts fresh from Plover's perspective.
         if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;
-        console.log("[skip] Enter pressed, advancing");
+        debugLog("skip",{key:"Enter",reason:"manual advance"});
         advR.current();
       }
     };
@@ -326,16 +570,44 @@ export default function StenoTrainer(){
   },[]);
 
   useEffect(()=>{
-    const iv=setInterval(()=>{if(inputRef.current&&document.activeElement!==inputRef.current)inputRef.current.focus();},200);
-    return()=>clearInterval(iv);
+    const handlePointerDown=()=>{pointerDownRef.current=true;};
+    const handlePointerUp=()=>{pointerDownRef.current=false;};
+    window.addEventListener("pointerdown",handlePointerDown);
+    window.addEventListener("pointerup",handlePointerUp);
+    window.addEventListener("blur",handlePointerUp);
+
+    const iv=setInterval(()=>{
+      const selection=document.getSelection();
+      const hasTextSelection=selection&&selection.type==="Range";
+      const activeTag=document.activeElement?.tagName;
+      const activeElementIsControl=["BUTTON","INPUT","SELECT","TEXTAREA"].includes(activeTag);
+      const shouldSkipFocus=pointerDownRef.current||hasTextSelection||activeElementIsControl;
+      if(inputRef.current&&document.activeElement!==inputRef.current&&!shouldSkipFocus){
+        inputRef.current.focus({preventScroll:true});
+        debugLog("focus hidden input",{
+          previousActiveTag:activeTag||null,
+          hasTextSelection:!!hasTextSelection,
+          pointerDown:pointerDownRef.current,
+        });
+      }
+    },200);
+    return()=>{
+      clearInterval(iv);
+      window.removeEventListener("pointerdown",handlePointerDown);
+      window.removeEventListener("pointerup",handlePointerUp);
+      window.removeEventListener("blur",handlePointerUp);
+    };
   },[]);
 
+  const completedWords=Math.min(wi,words.length);
+  const wpm=elapsedSeconds>0?Math.round(completedWords/(elapsedSeconds/60)):0;
   const acc=attempts>0?Math.round(correct/attempts*100):0;
+  const drillStats=getDrillStats(getSentenceName(si));
   const currentStrokeKeys=curData&&strokeIndex<curData.strokes.length
     ?curData.stenoKeys[strokeIndex]
     :null;
   const activeUni=currentStrokeKeys?getActiveUniKeys(currentStrokeKeys):new Set();
-  const showKeyboard=hintRevealed||!hideUntilWrong;
+  const showHints=hintMode!==HINT_MODES.NEVER&&(hintMode===HINT_MODES.ALWAYS||hintRevealed);
 
   const getStenoKeyColor=(sk)=>{
     const m=STENO_TO_UNI[sk];if(!m)return"var(--text-dim)";
@@ -343,21 +615,148 @@ export default function StenoTrainer(){
     return kd?FINGER_COLORS[kd.finger]:"var(--text-dim)";
   };
 
+  const focusTrainerInput=()=>{
+    requestAnimationFrame(()=>{
+      inputRef.current?.focus({preventScroll:true});
+    });
+  };
+
+  const resetSession=()=>{
+    if(fbRef.current)clearTimeout(fbRef.current);
+    if(settleRef.current)clearTimeout(settleRef.current);
+    setWi(0);
+    setStrokeIndex(0);
+    setHintRevealed(false);
+    setFb(null);
+    setCorrect(0);
+    setAttempts(0);
+    correctRef.current=0;
+    attemptsRef.current=0;
+    setSessionStarted(false);
+    setElapsedSeconds(0);
+    sessionStartRef.current=null;
+    pendingAdvanceRef.current=false;
+    strokeIndexRef.current=0;
+    if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;
+  };
+
+  const restartSession=()=>{
+    resetSession();
+    focusTrainerInput();
+    debugLog("session restart",{
+      sentenceIndex:si,
+      sentenceName:getSentenceName(si),
+    });
+  };
+
+  const selectSentence=(index)=>{
+    window.history.pushState(null,"",getSentencePath(index));
+    setSi(index);
+    resetSession();
+    focusTrainerInput();
+  };
+
   return(
     <div style={{"--bg":"#0f1119","--surface":"#1a1d2e","--surface2":"#232741","--text":"#e8eaf0","--text-dim":"#7b7f96","--accent":"#4f8cff","--hl-text":"#b8d4ff","--key-bg":"#1e2235","--key-border":"#2d3250","--key-text":"#8b8faa","--key-shadow":"#0a0c14","--error":"#e5484d","--success":"#30a46c",minHeight:"100vh",background:"var(--bg)",color:"var(--text)",fontFamily:"'JetBrains Mono','SF Mono','Fira Code',monospace",display:"flex",flexDirection:"column",alignItems:"center",padding:"24px 16px",boxSizing:"border-box"}}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0;}`}</style>
-      <input ref={inputRef} autoFocus onInput={handleInput} style={{position:"absolute",top:-100,left:-100,width:1,height:1,opacity:0,pointerEvents:"none"}}/>
+      <div style={{position:"fixed",top:16,left:16,zIndex:20,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:8}}>
+        <button type="button" onClick={()=>setShowDrills(open=>!open)} aria-expanded={showDrills} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderRadius:6,border:"1px solid var(--surface2)",background:"var(--surface)",color:"var(--text)",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 8px 24px rgba(0,0,0,0.25)"}}>
+          <span aria-hidden="true" style={{fontSize:15,lineHeight:1}}>▦</span>
+          <span>Drills & Tests</span>
+        </button>
+
+        {showDrills&&(
+          <div style={{width:230,maxHeight:"calc(100vh - 72px)",overflowY:"auto",padding:8,borderRadius:8,border:"1px solid var(--surface2)",background:"var(--surface)",boxShadow:"0 16px 40px rgba(0,0,0,0.35)",display:"flex",flexDirection:"column",alignItems:"stretch",gap:4,fontSize:12,color:"var(--text-dim)"}}>
+            {DRILL_ITEMS.map((item,idx)=>(
+              <div key={getSentenceName(idx)} style={{display:"flex",flexDirection:"column",gap:4}}>
+                {item.sectionTitle&&item.sectionTitle!==DRILL_ITEMS[idx-1]?.sectionTitle&&(
+                  <div style={{padding:"10px 10px 4px",fontSize:11,fontWeight:800,color:"var(--text)",textTransform:"uppercase",letterSpacing:0}}>
+                    {item.sectionTitle}
+                  </div>
+                )}
+                <button type="button" onClick={()=>selectSentence(idx)} style={{padding:"8px 10px",borderRadius:6,border:"1px solid transparent",background:idx===si?"var(--surface2)":"transparent",color:idx===si?"var(--text)":"var(--text-dim)",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:idx===si?700:400,textAlign:"left",lineHeight:1.35}}>
+                  {item.name || `Drill ${idx+1}`}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{position:"fixed",top:16,right:16,zIndex:20,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8}}>
+        <button type="button" onClick={()=>setShowConfig(open=>!open)} aria-expanded={showConfig} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderRadius:6,border:"1px solid var(--surface2)",background:"var(--surface)",color:"var(--text)",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 8px 24px rgba(0,0,0,0.25)"}}>
+          <span aria-hidden="true" style={{fontSize:15,lineHeight:1}}>⚙</span>
+          <span>Configuration</span>
+        </button>
+
+        {showConfig&&(
+          <div style={{width:220,padding:12,borderRadius:8,border:"1px solid var(--surface2)",background:"var(--surface)",boxShadow:"0 16px 40px rgba(0,0,0,0.35)",display:"flex",flexDirection:"column",alignItems:"stretch",gap:12,fontSize:13,color:"var(--text-dim)"}}>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              <div style={{fontSize:11,fontWeight:700,color:"var(--text)",textTransform:"uppercase"}}>Hint visibility</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",padding:2,borderRadius:6,border:"1px solid var(--surface2)",background:"var(--bg)",gap:2}}>
+                {HINT_OPTIONS.map((option)=>(
+                  <button key={option.value} type="button" onClick={()=>{setHintMode(option.value);focusTrainerInput();}} style={{minHeight:30,padding:"4px 6px",borderRadius:4,border:"none",background:hintMode===option.value?"var(--accent)":"transparent",color:hintMode===option.value?"#fff":"var(--text-dim)",cursor:"pointer",fontFamily:"inherit",fontSize:11,fontWeight:hintMode===option.value?700:500,lineHeight:1.15}}>
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}><input type="checkbox" checked={showFingers} onChange={e=>{setShowFingers(e.target.checked);focusTrainerInput();}} style={{accentColor:"var(--accent)"}}/>Finger map</label>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"not-allowed",opacity:0.6}}><input type="checkbox" checked={rawStenoMode} disabled style={{accentColor:"var(--accent)"}}/>Raw steno</label>
+          </div>
+        )}
+      </div>
 
       <div style={{textAlign:"center",marginBottom:16}}>
         <h1 style={{fontSize:28,fontWeight:800,letterSpacing:-1,background:"linear-gradient(135deg,#4f8cff,#a78bfa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>STENO TRAINER</h1>
         <p style={{fontSize:12,color:"var(--text-dim)",marginTop:4}}>Uni v4 · Lapwing theory · Chord the highlighted keys · Enter to skip</p>
       </div>
 
-      <div style={{display:"flex",gap:24,marginBottom:16,fontSize:13,color:"var(--text-dim)"}}>
-        <span>Streak <strong style={{color:streak>0?"var(--success)":"var(--text-dim)"}}>{streak}</strong></span>
-        <span>Best <strong style={{color:"var(--accent)"}}>{best}</strong></span>
+      <div style={{display:"flex",alignItems:"center",gap:24,marginBottom:16,fontSize:13,color:"var(--text-dim)",flexWrap:"wrap",justifyContent:"center"}}>
+        <span>Time <strong style={{color:sessionStarted?"var(--accent)":"var(--text-dim)"}}>{elapsedSeconds}s</strong></span>
+        <span>WPM <strong style={{color:wpm>0?"var(--success)":"var(--text-dim)"}}>{wpm}</strong></span>
         <span>Accuracy <strong style={{color:acc>=80?"var(--success)":"var(--text-dim)"}}>{acc}%</strong></span>
+        <div style={{display:"flex",gap:8}}>
+          <button type="button" onClick={restartSession} style={{padding:"4px 10px",borderRadius:4,border:"1px solid var(--surface2)",background:"var(--surface)",color:"var(--text)",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Restart</button>
+          <button type="button" onClick={()=>{setShowStats(true);focusTrainerInput();}} style={{padding:"4px 2px",border:"none",background:"transparent",color:"var(--accent)",cursor:"pointer",fontFamily:"inherit",fontSize:12,textDecoration:"underline"}}>Stats</button>
+        </div>
       </div>
+
+      {showStats&&(
+        <div style={{position:"fixed",inset:0,zIndex:40,background:"rgba(5,7,12,0.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>{setShowStats(false);focusTrainerInput();}}>
+          <div role="dialog" aria-modal="true" aria-label="Drill stats" onClick={e=>e.stopPropagation()} style={{width:"min(420px,100%)",padding:18,borderRadius:8,border:"1px solid var(--surface2)",background:"var(--surface)",boxShadow:"0 24px 70px rgba(0,0,0,0.45)",display:"flex",flexDirection:"column",gap:16}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:800,color:"var(--text)"}}>Stats</div>
+                <div style={{marginTop:4,fontSize:12,color:"var(--text-dim)"}}>{getSentenceName(si)}</div>
+              </div>
+              <button type="button" onClick={()=>{setShowStats(false);focusTrainerInput();}} style={{width:30,height:30,borderRadius:6,border:"1px solid var(--surface2)",background:"transparent",color:"var(--text-dim)",cursor:"pointer",fontFamily:"inherit",fontSize:16,lineHeight:1}}>×</button>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+              <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>Runs</div>
+                <div style={{marginTop:6,fontSize:22,fontWeight:800,color:"var(--text)"}}>{drillStats.runs}</div>
+              </div>
+              <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>Average WPM</div>
+                <div style={{marginTop:6,fontSize:22,fontWeight:800,color:drillStats.averageWpm>0?"var(--success)":"var(--text-dim)"}}>{drillStats.averageWpm}</div>
+              </div>
+              <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>Fastest WPM</div>
+                <div style={{marginTop:6,fontSize:22,fontWeight:800,color:drillStats.fastestWpm>0?"var(--success)":"var(--text-dim)"}}>{drillStats.fastestWpm}</div>
+              </div>
+              <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>Average time</div>
+                <div style={{marginTop:6,fontSize:22,fontWeight:800,color:drillStats.averageCompletionSeconds>0?"var(--text)":"var(--text-dim)"}}>{formatDuration(drillStats.averageCompletionSeconds)}</div>
+              </div>
+              <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>Fastest time</div>
+                <div style={{marginTop:6,fontSize:22,fontWeight:800,color:drillStats.fastestCompletionSeconds>0?"var(--success)":"var(--text-dim)"}}>{formatDuration(drillStats.fastestCompletionSeconds)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{marginBottom:8,padding:"10px 20px",borderRadius:8,background:"var(--surface)",border:"1px solid var(--surface2)",maxWidth:700,width:"100%",textAlign:"center",minHeight:44,display:"flex",flexWrap:"wrap",justifyContent:"center",gap:"4px 8px"}}>
         {words.map((w,idx)=>{
@@ -369,24 +768,19 @@ export default function StenoTrainer(){
 
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
         <span style={{fontSize:11,color:"var(--text-dim)"}}>{si+1}/{SENTENCES.length}</span>
-        <button onClick={()=>setShowList(!showList)} style={{padding:"3px 10px",borderRadius:4,border:"1px solid var(--surface2)",background:"transparent",color:"var(--text-dim)",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>{showList?"Hide":"Pick sentence"}</button>
       </div>
-
-      {showList&&(<div style={{maxWidth:700,width:"100%",maxHeight:200,overflowY:"auto",background:"var(--surface)",border:"1px solid var(--surface2)",borderRadius:8,marginBottom:16,padding:8}}>
-        {SENTENCES.map((s,idx)=>(<div key={idx} onClick={()=>{setSi(idx);setWi(0);setShowList(false);setFb(null);if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;}} style={{padding:"6px 10px",borderRadius:4,cursor:"pointer",fontSize:12,color:idx===si?"var(--accent)":"var(--text-dim)",background:idx===si?"var(--surface2)":"transparent",fontWeight:idx===si?700:400}}>{idx+1}. {s}</div>))}
-      </div>)}
 
       {curData&&(<div style={{marginBottom:16,textAlign:"center",minHeight:130,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
         <div style={{fontSize:72,fontWeight:800,letterSpacing:-2,lineHeight:1,color:fb==="correct"?"var(--success)":fb==="wrong"?"var(--error)":"var(--text)",transition:"color 0.15s",textShadow:fb==="correct"?"0 0 40px rgba(48,164,108,0.3)":fb==="wrong"?"0 0 40px rgba(229,72,77,0.3)":"none"}}>
-          {(wi===0?curStr.charAt(0).toUpperCase()+curStr.slice(1):curStr)+(wi===words.length-1?".":"")}
+          {rawStenoMode?curStr:(wi===0?curStr.charAt(0).toUpperCase()+curStr.slice(1):curStr)+(wi===words.length-1?".":"")}
         </div>
-        <div style={{opacity:showKeyboard?1:0,transition:"opacity 0.15s",display:"flex",flexDirection:"column",alignItems:"center",gap:0}}>
+        <div style={{opacity:showHints?1:0,transition:showHints?"opacity 0.15s":"none",display:"flex",flexDirection:"column",alignItems:"center",gap:0}}>
           {curData.strokes.length>1&&(
             <div style={{marginTop:8,fontSize:11,color:"var(--text-dim)",letterSpacing:1}}>
               STROKE {Math.min(strokeIndex+1,curData.strokes.length)} OF {curData.strokes.length}
             </div>
           )}
-          <div style={{opacity:showHints?1:0,transition:"opacity 0.15s",display:"flex",flexDirection:"column",alignItems:"center",gap:0}}>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:0}}>
             <div style={{marginTop:10,fontSize:16,color:"var(--accent)",fontWeight:600,display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap"}}>
               {curData.strokes.map((s,idx)=>(
                 <span key={idx} style={{
@@ -409,17 +803,16 @@ export default function StenoTrainer(){
         </div>
       </div>)}
 
+      {sentenceComplete&&(<div style={{marginBottom:16,textAlign:"center",minHeight:130,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        <div style={{fontSize:56,fontWeight:800,letterSpacing:-1,lineHeight:1,color:"var(--success)",textShadow:"0 0 40px rgba(48,164,108,0.3)"}}>Complete</div>
+      </div>)}
+
       {!curData&&curStr&&(<div style={{marginBottom:16,textAlign:"center",minHeight:130,display:"flex",alignItems:"center"}}>
         <div style={{fontSize:20,color:"var(--error)"}}>"{curStr}" not in dictionary — Enter to skip</div>
       </div>)}
 
-      <div style={{marginBottom:20,opacity:showKeyboard?1:0,transition:"opacity 0.15s"}}><UniKeyboard activeKeys={showHints?activeUni:new Set()} showFingers={showFingers}/></div>
-
-      <div style={{display:"flex",gap:20,fontSize:13,color:"var(--text-dim)"}}>
-        <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}><input type="checkbox" checked={showHints} onChange={e=>setShowHints(e.target.checked)} style={{accentColor:"var(--accent)"}}/>Show hints</label>
-        <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}><input type="checkbox" checked={showFingers} onChange={e=>setShowFingers(e.target.checked)} style={{accentColor:"var(--accent)"}}/>Finger map</label>
-        <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}><input type="checkbox" checked={hideUntilWrong} onChange={e=>setHideUntilWrong(e.target.checked)} style={{accentColor:"var(--accent)"}}/>Hide until wrong</label>
-      </div>
+      <div style={{marginBottom:8,opacity:showHints&&!sentenceComplete?1:0,transition:showHints&&!sentenceComplete?"opacity 0.15s":"none"}}><UniKeyboard activeKeys={showHints&&!sentenceComplete?activeUni:new Set()} showFingers={showFingers}/></div>
+      <input ref={inputRef} autoFocus aria-label="Steno input capture" onInput={handleInput} style={{width:1,height:1,opacity:0,border:0,padding:0,margin:0,pointerEvents:"none"}}/>
 
       <div style={{marginTop:12,fontSize:11,color:"var(--text-dim)",opacity:0.5}}>{SENTENCES.length} sentences · {Object.keys(WORD_MAP).length} words · Lapwing theory · Uni v4</div>
     </div>
