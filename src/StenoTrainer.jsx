@@ -146,6 +146,10 @@ function getDrillStats(drillName) {
     (fastest, entry) => Math.max(fastest, Number(entry.wpm) || 0),
     0
   );
+  const bestAccuracy = completions.reduce(
+    (best, entry) => Math.max(best, getEntryAccuracy(entry)),
+    0
+  );
   const completionSeconds = completions
     .map((entry) => Number(entry.elapsedSeconds) || 0)
     .filter((seconds) => seconds > 0);
@@ -157,6 +161,7 @@ function getDrillStats(drillName) {
     averageAccuracy: completions.length
       ? Math.round(totalAccuracy / completions.length)
       : 0,
+    bestAccuracy,
     averageCompletionSeconds: completions.length
       ? Math.round(totalCompletionSeconds / completions.length)
       : 0,
@@ -747,10 +752,14 @@ export default function StenoTrainer(){
               </div>
               <button type="button" onClick={()=>{setShowStats(false);focusTrainerInput();}} style={{width:30,height:30,borderRadius:6,border:"1px solid var(--surface2)",background:"transparent",color:"var(--text-dim)",cursor:"pointer",fontFamily:"inherit",fontSize:16,lineHeight:1}}>×</button>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
               <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
                 <div style={{fontSize:11,color:"var(--text-dim)"}}>Runs</div>
                 <div style={{marginTop:6,fontSize:22,fontWeight:800,color:"var(--text)"}}>{drillStats.runs}</div>
+              </div>
+              <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>Word count</div>
+                <div style={{marginTop:6,fontSize:22,fontWeight:800,color:"var(--text)"}}>{words.length}</div>
               </div>
               <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
                 <div style={{fontSize:11,color:"var(--text-dim)"}}>Average WPM</div>
@@ -763,6 +772,10 @@ export default function StenoTrainer(){
               <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
                 <div style={{fontSize:11,color:"var(--text-dim)"}}>Average accuracy</div>
                 <div style={{marginTop:6,fontSize:22,fontWeight:800,color:drillStats.averageAccuracy>=80?"var(--success)":"var(--text-dim)"}}>{drillStats.averageAccuracy}%</div>
+              </div>
+              <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>Best accuracy</div>
+                <div style={{marginTop:6,fontSize:22,fontWeight:800,color:drillStats.bestAccuracy>0?"var(--success)":"var(--text-dim)"}}>{drillStats.bestAccuracy}%</div>
               </div>
               <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
                 <div style={{fontSize:11,color:"var(--text-dim)"}}>Average time</div>
