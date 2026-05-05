@@ -122,12 +122,24 @@ function getDrillStats(drillName) {
   const completions = loadDrillCompletions().filter(
     (entry) => entry?.drillName === drillName
   );
+  const getEntryAccuracy = (entry) => {
+    const storedAccuracy = Number(entry.accuracy);
+    if (Number.isFinite(storedAccuracy)) return storedAccuracy;
+
+    const attempts = Number(entry.attempts) || 0;
+    const correct = Number(entry.correct) || 0;
+    return attempts > 0 ? Math.round(correct / attempts * 100) : 0;
+  };
   const totalWpm = completions.reduce(
     (total, entry) => total + (Number(entry.wpm) || 0),
     0
   );
   const totalCompletionSeconds = completions.reduce(
     (total, entry) => total + (Number(entry.elapsedSeconds) || 0),
+    0
+  );
+  const totalAccuracy = completions.reduce(
+    (total, entry) => total + getEntryAccuracy(entry),
     0
   );
   const fastestWpm = completions.reduce(
@@ -142,6 +154,9 @@ function getDrillStats(drillName) {
     runs: completions.length,
     averageWpm: completions.length ? Math.round(totalWpm / completions.length) : 0,
     fastestWpm,
+    averageAccuracy: completions.length
+      ? Math.round(totalAccuracy / completions.length)
+      : 0,
     averageCompletionSeconds: completions.length
       ? Math.round(totalCompletionSeconds / completions.length)
       : 0,
@@ -744,6 +759,10 @@ export default function StenoTrainer(){
               <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
                 <div style={{fontSize:11,color:"var(--text-dim)"}}>Fastest WPM</div>
                 <div style={{marginTop:6,fontSize:22,fontWeight:800,color:drillStats.fastestWpm>0?"var(--success)":"var(--text-dim)"}}>{drillStats.fastestWpm}</div>
+              </div>
+              <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
+                <div style={{fontSize:11,color:"var(--text-dim)"}}>Average accuracy</div>
+                <div style={{marginTop:6,fontSize:22,fontWeight:800,color:drillStats.averageAccuracy>=80?"var(--success)":"var(--text-dim)"}}>{drillStats.averageAccuracy}%</div>
               </div>
               <div style={{padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
                 <div style={{fontSize:11,color:"var(--text-dim)"}}>Average time</div>
