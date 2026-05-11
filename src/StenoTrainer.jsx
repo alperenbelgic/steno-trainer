@@ -186,6 +186,54 @@ function buildDrillItems(items) {
 }
 
 const DRILL_ITEMS = buildDrillItems(sentences);
+
+function splitDrillContent(content) {
+  return content.trim().split(/\s+/).filter(Boolean);
+}
+
+function getDrillRepeat(item) {
+  const repeat = Number(item?.repeat);
+  return Number.isFinite(repeat) && repeat > 0 ? Math.floor(repeat) : 1;
+}
+
+function buildRandomWords(baseWords, repeat) {
+  const counts = new Map();
+  baseWords.forEach((word) => counts.set(word, (counts.get(word) || 0) + repeat));
+
+  const totalWords = [...counts.values()].reduce((total, count) => total + count, 0);
+  const randomWords = [];
+  let previousWord = null;
+
+  for (let i = 0; i < totalWords; i += 1) {
+    const candidates = [...counts.entries()].filter(
+      ([word, count]) => count > 0 && word !== previousWord
+    );
+
+    if (candidates.length === 0) {
+      const remaining = [...counts.entries()].find(([, count]) => count > 0);
+      if (!remaining) break;
+      candidates.push(remaining);
+    }
+
+    const highestCount = Math.max(...candidates.map(([, count]) => count));
+    const topCandidates = candidates.filter(([, count]) => count === highestCount);
+    const [nextWord] = topCandidates[Math.floor(Math.random() * topCandidates.length)];
+
+    randomWords.push(nextWord);
+    counts.set(nextWord, counts.get(nextWord) - 1);
+    previousWord = nextWord;
+  }
+
+  return randomWords;
+}
+
+function buildDrillWords(item) {
+  if (typeof item?.content !== "string") return [];
+  const baseWords = splitDrillContent(item.content);
+  if (item.mode !== "random") return baseWords;
+  return buildRandomWords(baseWords, getDrillRepeat(item));
+}
+
 const SENTENCES = DRILL_ITEMS.map((sentence) => sentence.content);
 const HINT_MODES = {
   ALWAYS: "always",
@@ -306,6 +354,9 @@ function UniKeyboard({activeKeys,showFingers}){
 
 export default function StenoTrainer(){
   const[si,setSi]=useState(INITIAL_SENTENCE_INDEX);
+  const[words,setWords]=useState(() =>
+    buildDrillWords(DRILL_ITEMS[INITIAL_SENTENCE_INDEX] || DRILL_ITEMS[0])
+  );
   const[wi,setWi]=useState(0);
   const[strokeIndex,setStrokeIndex]=useState(0);
   const[hintMode,setHintMode]=useState(HINT_MODES.AFTER_FAIL);
@@ -337,8 +388,7 @@ export default function StenoTrainer(){
   const renderCountRef=useRef(0);
   renderCountRef.current+=1;
 
-  const sentence=SENTENCES[si]||SENTENCES[0];
-  const words=sentence.split(" ");
+  const drillItem=DRILL_ITEMS[si]||DRILL_ITEMS[0];
   sentenceIndexRef.current=si;
   wordIndexRef.current=wi;
   wordsLengthRef.current=words.length;
@@ -396,6 +446,7 @@ export default function StenoTrainer(){
       const index=getUrlSentenceIndex();
       if(index===-1)return;
       setSi(index);
+      setWords(buildDrillWords(DRILL_ITEMS[index]));
       setWi(0);
       setCorrect(0);
       setAttempts(0);
@@ -413,18 +464,18 @@ export default function StenoTrainer(){
 
   const advance=useCallback(()=>{
     setWi(prev=>{
-      if(prev+1>=sentence.split(" ").length){
+      if(prev+1>=wordsLengthRef.current){
         debugLog("advance",{
           reason:"sentence complete",
-          sentenceIndex:si,
-          sentenceName:getSentenceName(si),
+          sentenceIndex:sentenceIndexRef.current,
+          sentenceName:getSentenceName(sentenceIndexRef.current),
         });
         pendingAdvanceRef.current=false;
-        return sentence.split(" ").length;
+        return wordsLengthRef.current;
       }
       return prev+1;
     });
-  },[sentence]);
+  },[]);
 
   const advR=useRef(advance);advR.current=advance;
 
@@ -661,6 +712,7 @@ export default function StenoTrainer(){
   };
 
   const restartSession=()=>{
+    setWords(buildDrillWords(drillItem));
     resetSession();
     focusTrainerInput();
     debugLog("session restart",{
@@ -672,6 +724,7 @@ export default function StenoTrainer(){
   const selectSentence=(index)=>{
     window.history.pushState(null,"",getSentencePath(index));
     setSi(index);
+    setWords(buildDrillWords(DRILL_ITEMS[index]));
     resetSession();
     focusTrainerInput();
   };

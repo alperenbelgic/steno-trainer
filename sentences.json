@@ -13,6 +13,18 @@
     "rawSteno": true
   },
   {
+    "name": "Bottom Row Mixed",
+    "content": "-G -Z -B -G -S R -R -Z W S K -Z -S W S -B K -R R -G R -B K W -S -R -Z S -G -S W R -Z S -G -B -R K -R K S -G -S -Z -B R W -R -B K -Z -S S -G W R S -G -B R -S -R K W -Z R -G W -R -S -B K -Z S -B S -Z -G R K -S -R W -G K -S -B W -Z S R -R -Z R -B -G W -S K S -R S -B -S -G -R W -Z R K -S -Z -B K -G S W R -R W -B S -Z K -G R -R -S R -B W S K -S -G -R -Z -R K -G R -S W -Z -B S -R S R W -S -G -Z -B K R -G -Z K -S W -B S -R K -R -S -Z -B -G R W S -Z K -G -S S -B R -R W -G -B W K -Z S -R -S R -Z W -B -G -R K S -S R",
+    "rawSteno": true
+  },  
+  {
+    "name": "Bottom Row Mixed Random",
+    "content": " S  K  W R -R -B -G -S -Z",
+    "rawSteno": true,
+    "mode": "random", 
+    "repeat": 22
+  },
+  {
     "title": "Other stuff"
   },
   {
