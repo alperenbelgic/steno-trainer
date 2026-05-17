@@ -94,6 +94,23 @@ function debugLog(event, payload = {}) {
 const COMPLETION_STORAGE_KEY = "stenoTrainer.drillCompletions.v1";
 const WORD_STATS_STORAGE_KEY = "stenoTrainer.drillWordStats.v1";
 const TOP_WORD_STAT_COUNT = 5;
+const WORD_STAT_RECENT_LIMIT = 50;
+const STATS_RANGES = {
+  LIFETIME: "lifetime",
+  LAST_10: "last-10",
+  LAST_5: "last-5",
+  LAST_RUN: "last-run",
+};
+const STATS_RANGE_OPTIONS = [
+  {value:STATS_RANGES.LIFETIME,label:"Lifetime"},
+  {value:STATS_RANGES.LAST_10,label:"Last 10"},
+  {value:STATS_RANGES.LAST_5,label:"Last 5"},
+  {value:STATS_RANGES.LAST_RUN,label:"Last drill"},
+];
+
+function createDrillRunId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function saveDrillCompletion(entry) {
   if (typeof window === "undefined" || !window.localStorage) return;
@@ -225,6 +242,11 @@ function mergeWordStats(target, source) {
     target.wrongOutputs[output] = (target.wrongOutputs[output] || 0) + (Number(count) || 0);
   });
 
+  if (!Array.isArray(target.recentAttempts)) target.recentAttempts = [];
+  if (Array.isArray(source.recentAttempts)) {
+    target.recentAttempts.push(...source.recentAttempts);
+  }
+
   return target;
 }
 
@@ -237,7 +259,75 @@ function createEmptyWordStat(word) {
     correctTotalMs: 0,
     wrongAttempts: 0,
     wrongOutputs: {},
+    recentAttempts: [],
   };
+}
+
+function normalizeRecentAttempt(attempt) {
+  const wrongOutputs = Array.isArray(attempt?.wrongOutputs)
+    ? attempt.wrongOutputs.map(normalizeAttemptOutput)
+    : [];
+  const wrongAttempts = Number(attempt?.wrongAttempts) || wrongOutputs.length || 0;
+
+  return {
+    completedAt: typeof attempt?.completedAt === "string" ? attempt.completedAt : "",
+    runId: typeof attempt?.runId === "string" ? attempt.runId : "",
+    elapsedMs: Math.max(0, Number(attempt?.elapsedMs) || 0),
+    failed: Boolean(attempt?.failed) || wrongAttempts > 0,
+    wrongAttempts,
+    wrongOutputs,
+  };
+}
+
+function getAttemptTimestamp(attempt) {
+  const timestamp = Date.parse(attempt.completedAt);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getLastCompletedRunId(drillName, scope) {
+  const completions = loadDrillCompletions()
+    .filter((entry) => entry?.runId)
+    .filter((entry) => scope === "global" || entry.drillName === drillName)
+    .sort((a, b) => {
+      const aTime = Date.parse(a.completedAt || "");
+      const bTime = Date.parse(b.completedAt || "");
+      return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+    });
+
+  return completions[0]?.runId || "";
+}
+
+function summarizeRecentWordStat(wordStats, range, lastRunId) {
+  let recentAttempts = Array.isArray(wordStats.recentAttempts)
+    ? wordStats.recentAttempts.map(normalizeRecentAttempt)
+    : [];
+
+  if (range === STATS_RANGES.LAST_RUN) {
+    recentAttempts = lastRunId
+      ? recentAttempts.filter((attempt) => attempt.runId === lastRunId)
+      : [];
+  } else {
+    const limit = range === STATS_RANGES.LAST_5 ? 5 : 10;
+    recentAttempts = [...recentAttempts]
+      .sort((a, b) => getAttemptTimestamp(b) - getAttemptTimestamp(a))
+      .slice(0, limit);
+  }
+
+  const recentWordStats = createEmptyWordStat(wordStats.expectedWord);
+  recentAttempts.forEach((attempt) => {
+    recentWordStats.appearances += 1;
+    recentWordStats.correctCount += 1;
+    recentWordStats.correctTotalMs += attempt.elapsedMs;
+    if (attempt.failed) {
+      recentWordStats.failedAppearances += 1;
+    }
+    recentWordStats.wrongAttempts += attempt.wrongAttempts;
+    attempt.wrongOutputs.forEach((output) => {
+      recentWordStats.wrongOutputs[output] = (recentWordStats.wrongOutputs[output] || 0) + 1;
+    });
+  });
+
+  return summarizeWordStat(recentWordStats);
 }
 
 function summarizeWordStat(wordStats) {
@@ -272,7 +362,7 @@ function summarizeWordStat(wordStats) {
   };
 }
 
-function saveDrillWordStat({drillName, sectionTitle, expectedWord, elapsedMs, wrongOutputs}) {
+function saveDrillWordStat({drillName, sectionTitle, expectedWord, elapsedMs, wrongOutputs, runId}) {
   if (!drillName || !expectedWord) return;
 
   const store = loadWordStatsStore();
@@ -291,22 +381,37 @@ function saveDrillWordStat({drillName, sectionTitle, expectedWord, elapsedMs, wr
     correctTotalMs: 0,
     wrongAttempts: 0,
     wrongOutputs: {},
+    recentAttempts: [],
   };
 
   const wrongs = Array.isArray(wrongOutputs) ? wrongOutputs : [];
+  const normalizedWrongs = wrongs.map(normalizeAttemptOutput);
+  const safeElapsedMs = Math.max(0, Number(elapsedMs) || 0);
   wordStats.expectedWord = expectedWord;
   wordStats.appearances += 1;
   wordStats.correctCount += 1;
-  wordStats.correctTotalMs += Math.max(0, Number(elapsedMs) || 0);
+  wordStats.correctTotalMs += safeElapsedMs;
 
-  if (wrongs.length > 0) {
+  if (normalizedWrongs.length > 0) {
     wordStats.failedAppearances += 1;
-    wordStats.wrongAttempts += wrongs.length;
-    wrongs.forEach((output) => {
-      const attempt = normalizeAttemptOutput(output);
+    wordStats.wrongAttempts += normalizedWrongs.length;
+    normalizedWrongs.forEach((attempt) => {
       wordStats.wrongOutputs[attempt] = (wordStats.wrongOutputs[attempt] || 0) + 1;
     });
   }
+
+  const recentAttempts = Array.isArray(wordStats.recentAttempts)
+    ? wordStats.recentAttempts
+    : [];
+  recentAttempts.push({
+    completedAt: new Date().toISOString(),
+    runId: runId || "",
+    elapsedMs: safeElapsedMs,
+    failed: normalizedWrongs.length > 0,
+    wrongAttempts: normalizedWrongs.length,
+    wrongOutputs: normalizedWrongs,
+  });
+  wordStats.recentAttempts = recentAttempts.slice(-WORD_STAT_RECENT_LIMIT);
 
   drillStats.sectionTitle = sectionTitle || drillStats.sectionTitle || "";
   drillStats.updatedAt = new Date().toISOString();
@@ -316,7 +421,7 @@ function saveDrillWordStat({drillName, sectionTitle, expectedWord, elapsedMs, wr
   debugLog("word stats saved", {drillName, expectedWord, wrongs: wrongs.length});
 }
 
-function getWordStatsByScope(drillName, scope) {
+function getWordStatsByScope(drillName, scope, range) {
   const store = loadWordStatsStore();
   const mergedWords = {};
 
@@ -342,13 +447,19 @@ function getWordStatsByScope(drillName, scope) {
     });
   }
 
+  const lastRunId = range === STATS_RANGES.LAST_RUN
+    ? getLastCompletedRunId(drillName, scope)
+    : "";
+
   return Object.values(mergedWords)
-    .map(summarizeWordStat)
+    .map((wordStats) => range === STATS_RANGES.LIFETIME
+      ? summarizeWordStat(wordStats)
+      : summarizeRecentWordStat(wordStats, range, lastRunId))
     .filter((wordStats) => wordStats.appearances > 0);
 }
 
-function getTopWordStats(drillName, scope, limit = TOP_WORD_STAT_COUNT) {
-  const wordStats = getWordStatsByScope(drillName, scope);
+function getTopWordStats(drillName, scope, range, limit = TOP_WORD_STAT_COUNT) {
+  const wordStats = getWordStatsByScope(drillName, scope, range);
   const byFailures = [...wordStats]
     .filter((entry) => entry.failedAppearances > 0)
     .sort((a, b) =>
@@ -660,6 +771,7 @@ export default function StenoTrainer(){
   const[showConfig,setShowConfig]=useState(true);
   const[showStats,setShowStats]=useState(false);
   const[statsScope,setStatsScope]=useState("drill");
+  const[statsRange,setStatsRange]=useState(STATS_RANGES.LIFETIME);
   const[statsRefresh,setStatsRefresh]=useState(0);
   const inputRef=useRef(null);
   const fbRef=useRef(null);
@@ -676,6 +788,7 @@ export default function StenoTrainer(){
   const wordsLengthRef=useRef(0);
   const wordStartedAtRef=useRef(Date.now());
   const wordWrongOutputsRef=useRef([]);
+  const drillRunIdRef=useRef(createDrillRunId());
   const renderCountRef=useRef(0);
   renderCountRef.current+=1;
 
@@ -748,6 +861,7 @@ export default function StenoTrainer(){
       sessionStartRef.current=null;
       wordStartedAtRef.current=Date.now();
       wordWrongOutputsRef.current=[];
+      drillRunIdRef.current=createDrillRunId();
       setFb(null);
       if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;
     };
@@ -850,6 +964,7 @@ export default function StenoTrainer(){
             expectedWord:data.word,
             elapsedMs:Date.now()-wordStartedAtRef.current,
             wrongOutputs:wordWrongOutputsRef.current,
+            runId:drillRunIdRef.current,
           });
           setStatsRefresh(v=>v+1);
         }
@@ -864,6 +979,7 @@ export default function StenoTrainer(){
           saveDrillCompletion({
             drillName:getSentenceName(drillIndex),
             sectionTitle:DRILL_ITEMS[drillIndex]?.sectionTitle || "",
+            runId:drillRunIdRef.current,
             completedAt:new Date().toISOString(),
             elapsedSeconds:elapsed,
             wpm:completionWpm,
@@ -987,7 +1103,7 @@ export default function StenoTrainer(){
   const acc=attempts>0?Math.round(correct/attempts*100):0;
   const currentDrillName=getSentenceName(si);
   const drillStats=getDrillStats(currentDrillName);
-  const topWordStats=getTopWordStats(currentDrillName,statsScope);
+  const topWordStats=getTopWordStats(currentDrillName,statsScope,statsRange);
   const currentStrokeKeys=curData&&strokeIndex<curData.strokes.length
     ?curData.stenoKeys[strokeIndex]
     :null;
@@ -1024,6 +1140,7 @@ export default function StenoTrainer(){
     strokeIndexRef.current=0;
     wordStartedAtRef.current=Date.now();
     wordWrongOutputsRef.current=[];
+    drillRunIdRef.current=createDrillRunId();
     if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;
   };
 
@@ -1162,6 +1279,13 @@ export default function StenoTrainer(){
                 {value:"global",label:"All drills"},
               ].map((option)=>(
                 <button key={option.value} type="button" onClick={()=>{setStatsScope(option.value);focusTrainerInput();}} style={{minHeight:32,padding:"5px 8px",borderRadius:4,border:"none",background:statsScope===option.value?"var(--accent)":"transparent",color:statsScope===option.value?"#fff":"var(--text-dim)",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:statsScope===option.value?800:600}}>
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",padding:2,borderRadius:6,border:"1px solid var(--surface2)",background:"var(--bg)",gap:2}}>
+              {STATS_RANGE_OPTIONS.map((option)=>(
+                <button key={option.value} type="button" onClick={()=>{setStatsRange(option.value);focusTrainerInput();}} style={{minHeight:32,padding:"5px 6px",borderRadius:4,border:"none",background:statsRange===option.value?"var(--accent)":"transparent",color:statsRange===option.value?"#fff":"var(--text-dim)",cursor:"pointer",fontFamily:"inherit",fontSize:11,fontWeight:statsRange===option.value?800:600,lineHeight:1.15}}>
                   {option.label}
                 </button>
               ))}
