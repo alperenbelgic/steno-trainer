@@ -78,6 +78,11 @@ function formatDuration(seconds) {
   return minutes > 0 ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
 }
 
+function formatMilliseconds(ms) {
+  if (!ms) return "0.0s";
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function debugLog(event, payload = {}) {
   try {
     console.log(`[steno] ${event} ${JSON.stringify(payload)}`);
@@ -87,6 +92,8 @@ function debugLog(event, payload = {}) {
 }
 
 const COMPLETION_STORAGE_KEY = "stenoTrainer.drillCompletions.v1";
+const WORD_STATS_STORAGE_KEY = "stenoTrainer.drillWordStats.v1";
+const TOP_WORD_STAT_COUNT = 5;
 
 function saveDrillCompletion(entry) {
   if (typeof window === "undefined" || !window.localStorage) return;
@@ -168,6 +175,202 @@ function getDrillStats(drillName) {
     fastestCompletionSeconds: completionSeconds.length
       ? Math.min(...completionSeconds)
       : 0,
+  };
+}
+
+function loadWordStatsStore() {
+  if (typeof window === "undefined" || !window.localStorage) return {};
+
+  try {
+    const store = JSON.parse(
+      window.localStorage.getItem(WORD_STATS_STORAGE_KEY) || "{}"
+    );
+    return store && typeof store === "object" && !Array.isArray(store) ? store : {};
+  } catch (error) {
+    debugLog("word stats load failed", {message: error?.message});
+    return {};
+  }
+}
+
+function saveWordStatsStore(store) {
+  if (typeof window === "undefined" || !window.localStorage) return;
+
+  try {
+    window.localStorage.setItem(WORD_STATS_STORAGE_KEY, JSON.stringify(store));
+  } catch (error) {
+    debugLog("word stats save failed", {message: error?.message});
+  }
+}
+
+function normalizeStatKey(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeAttemptOutput(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || "(blank)";
+}
+
+function mergeWordStats(target, source) {
+  if (!source) return target;
+
+  target.expectedWord = target.expectedWord || source.expectedWord;
+  target.appearances += Number(source.appearances) || 0;
+  target.failedAppearances += Number(source.failedAppearances) || 0;
+  target.correctCount += Number(source.correctCount) || 0;
+  target.correctTotalMs += Number(source.correctTotalMs) || 0;
+  target.wrongAttempts += Number(source.wrongAttempts) || 0;
+
+  Object.entries(source.wrongOutputs || {}).forEach(([output, count]) => {
+    target.wrongOutputs[output] = (target.wrongOutputs[output] || 0) + (Number(count) || 0);
+  });
+
+  return target;
+}
+
+function createEmptyWordStat(word) {
+  return {
+    expectedWord: word,
+    appearances: 0,
+    failedAppearances: 0,
+    correctCount: 0,
+    correctTotalMs: 0,
+    wrongAttempts: 0,
+    wrongOutputs: {},
+  };
+}
+
+function summarizeWordStat(wordStats) {
+  const appearances = Number(wordStats.appearances) || 0;
+  const failedAppearances = Number(wordStats.failedAppearances) || 0;
+  const correctCount = Number(wordStats.correctCount) || 0;
+  const correctTotalMs = Number(wordStats.correctTotalMs) || 0;
+  const wrongAttempts = Number(wordStats.wrongAttempts) || 0;
+  const wrongOutputs = Object.entries(wordStats.wrongOutputs || {})
+    .map(([output, count]) => ({
+      output,
+      count: Number(count) || 0,
+      percentage: wrongAttempts > 0
+        ? Math.round((Number(count) || 0) / wrongAttempts * 100)
+        : 0,
+    }))
+    .filter((entry) => entry.count > 0)
+    .sort((a, b) => b.count - a.count || a.output.localeCompare(b.output));
+
+  return {
+    expectedWord: wordStats.expectedWord,
+    appearances,
+    failedAppearances,
+    failureRate: appearances > 0
+      ? Math.round(failedAppearances / appearances * 100)
+      : 0,
+    averageCorrectMs: correctCount > 0
+      ? Math.round(correctTotalMs / correctCount)
+      : 0,
+    wrongAttempts,
+    wrongOutputs,
+  };
+}
+
+function saveDrillWordStat({drillName, sectionTitle, expectedWord, elapsedMs, wrongOutputs}) {
+  if (!drillName || !expectedWord) return;
+
+  const store = loadWordStatsStore();
+  const drillStats = store[drillName] || {
+    drillName,
+    sectionTitle: sectionTitle || "",
+    updatedAt: "",
+    words: {},
+  };
+  const wordKey = normalizeStatKey(expectedWord);
+  const wordStats = drillStats.words[wordKey] || {
+    expectedWord,
+    appearances: 0,
+    failedAppearances: 0,
+    correctCount: 0,
+    correctTotalMs: 0,
+    wrongAttempts: 0,
+    wrongOutputs: {},
+  };
+
+  const wrongs = Array.isArray(wrongOutputs) ? wrongOutputs : [];
+  wordStats.expectedWord = expectedWord;
+  wordStats.appearances += 1;
+  wordStats.correctCount += 1;
+  wordStats.correctTotalMs += Math.max(0, Number(elapsedMs) || 0);
+
+  if (wrongs.length > 0) {
+    wordStats.failedAppearances += 1;
+    wordStats.wrongAttempts += wrongs.length;
+    wrongs.forEach((output) => {
+      const attempt = normalizeAttemptOutput(output);
+      wordStats.wrongOutputs[attempt] = (wordStats.wrongOutputs[attempt] || 0) + 1;
+    });
+  }
+
+  drillStats.sectionTitle = sectionTitle || drillStats.sectionTitle || "";
+  drillStats.updatedAt = new Date().toISOString();
+  drillStats.words[wordKey] = wordStats;
+  store[drillName] = drillStats;
+  saveWordStatsStore(store);
+  debugLog("word stats saved", {drillName, expectedWord, wrongs: wrongs.length});
+}
+
+function getWordStatsByScope(drillName, scope) {
+  const store = loadWordStatsStore();
+  const mergedWords = {};
+
+  if (scope === "global") {
+    Object.values(store).forEach((drillStats) => {
+      Object.values(drillStats?.words || {}).forEach((wordStats) => {
+        const wordKey = normalizeStatKey(wordStats.expectedWord);
+        if (!wordKey) return;
+        mergedWords[wordKey] = mergeWordStats(
+          mergedWords[wordKey] || createEmptyWordStat(wordStats.expectedWord),
+          wordStats
+        );
+      });
+    });
+  } else {
+    Object.values(store[drillName]?.words || {}).forEach((wordStats) => {
+      const wordKey = normalizeStatKey(wordStats.expectedWord);
+      if (!wordKey) return;
+      mergedWords[wordKey] = mergeWordStats(
+        mergedWords[wordKey] || createEmptyWordStat(wordStats.expectedWord),
+        wordStats
+      );
+    });
+  }
+
+  return Object.values(mergedWords)
+    .map(summarizeWordStat)
+    .filter((wordStats) => wordStats.appearances > 0);
+}
+
+function getTopWordStats(drillName, scope, limit = TOP_WORD_STAT_COUNT) {
+  const wordStats = getWordStatsByScope(drillName, scope);
+  const byFailures = [...wordStats]
+    .filter((entry) => entry.failedAppearances > 0)
+    .sort((a, b) =>
+      b.failureRate - a.failureRate ||
+      b.failedAppearances - a.failedAppearances ||
+      b.wrongAttempts - a.wrongAttempts ||
+      a.expectedWord.localeCompare(b.expectedWord)
+    )
+    .slice(0, limit);
+  const bySpeed = [...wordStats]
+    .filter((entry) => entry.averageCorrectMs > 0)
+    .sort((a, b) =>
+      b.averageCorrectMs - a.averageCorrectMs ||
+      b.appearances - a.appearances ||
+      a.expectedWord.localeCompare(b.expectedWord)
+    )
+    .slice(0, limit);
+
+  return {
+    all: wordStats.sort((a, b) => a.expectedWord.localeCompare(b.expectedWord)),
+    mostFailed: byFailures,
+    slowest: bySpeed,
   };
 }
 
@@ -352,6 +555,91 @@ function UniKeyboard({activeKeys,showFingers}){
   </div>);
 }
 
+function WordStatCard({wordStats}){
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"minmax(110px,1fr) minmax(190px,2fr)",gap:10,alignItems:"center",padding:10,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)"}}>
+      <div style={{minWidth:0}}>
+        <div style={{fontSize:17,fontWeight:800,color:"var(--text)",overflowWrap:"anywhere"}}>{wordStats.expectedWord}</div>
+        <div style={{marginTop:3,fontSize:11,color:"var(--text-dim)"}}>{wordStats.appearances} seen</div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:7,minWidth:0}}>
+        <div style={{display:"flex",gap:12,flexWrap:"wrap",fontSize:12,color:"var(--text-dim)"}}>
+          <span><strong style={{color:"var(--error)"}}>{wordStats.failureRate}%</strong> failed</span>
+          <span>{wordStats.failedAppearances}/{wordStats.appearances}</span>
+          <span><strong style={{color:"var(--text)"}}>{formatMilliseconds(wordStats.averageCorrectMs)}</strong> avg</span>
+          <span>{wordStats.wrongAttempts} wrong</span>
+        </div>
+        {wordStats.wrongOutputs.length>0&&(
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"flex-start"}}>
+            {wordStats.wrongOutputs.slice(0,5).map((attempt)=>(
+              <span key={attempt.output} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"3px 7px",borderRadius:4,border:"1px solid var(--surface2)",background:"var(--surface)",fontSize:11,color:"var(--text-dim)",maxWidth:"100%"}}>
+                <strong style={{color:"var(--text)",overflowWrap:"anywhere"}}>{attempt.output}</strong>
+                <span>{attempt.percentage}%</span>
+                <span style={{opacity:0.7}}>({attempt.count})</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WordStatSection({title,subtitle,words,emptyText}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:12}}>
+        <div style={{fontSize:13,fontWeight:800,color:"var(--text)"}}>{title}</div>
+        <div style={{fontSize:11,color:"var(--text-dim)",textAlign:"right"}}>{subtitle}</div>
+      </div>
+      {words.length===0?(
+        <div style={{padding:12,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)",fontSize:12,color:"var(--text-dim)"}}>
+          {emptyText}
+        </div>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {words.map((wordStats)=><WordStatCard key={wordStats.expectedWord} wordStats={wordStats}/>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WordStatsTable({words}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",gap:12}}>
+        <div style={{fontSize:13,fontWeight:800,color:"var(--text)"}}>Tracked words</div>
+        <div style={{fontSize:11,color:"var(--text-dim)"}}>{words.length} words</div>
+      </div>
+      {words.length===0?(
+        <div style={{padding:12,borderRadius:6,background:"var(--bg)",border:"1px solid var(--surface2)",fontSize:12,color:"var(--text-dim)"}}>
+          No word timing recorded yet.
+        </div>
+      ):(
+        <div style={{maxHeight:260,overflowY:"auto",borderRadius:6,border:"1px solid var(--surface2)",background:"var(--bg)"}}>
+          <div style={{position:"sticky",top:0,zIndex:1,display:"grid",gridTemplateColumns:"minmax(90px,1.3fr) repeat(4,minmax(68px,0.8fr))",gap:8,padding:"8px 10px",background:"var(--surface2)",fontSize:10,fontWeight:800,color:"var(--text)",textTransform:"uppercase"}}>
+            <span>Word</span>
+            <span>Seen</span>
+            <span>Avg</span>
+            <span>Failed</span>
+            <span>Wrong</span>
+          </div>
+          {words.map((wordStats)=>(
+            <div key={wordStats.expectedWord} style={{display:"grid",gridTemplateColumns:"minmax(90px,1.3fr) repeat(4,minmax(68px,0.8fr))",gap:8,padding:"8px 10px",borderTop:"1px solid var(--surface2)",fontSize:12,color:"var(--text-dim)",alignItems:"center"}}>
+              <strong style={{color:"var(--text)",overflowWrap:"anywhere"}}>{wordStats.expectedWord}</strong>
+              <span>{wordStats.appearances}</span>
+              <span>{formatMilliseconds(wordStats.averageCorrectMs)}</span>
+              <span>{wordStats.failureRate}%</span>
+              <span>{wordStats.wrongAttempts}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function StenoTrainer(){
   const[si,setSi]=useState(INITIAL_SENTENCE_INDEX);
   const[words,setWords]=useState(() =>
@@ -371,6 +659,7 @@ export default function StenoTrainer(){
   const[showDrills,setShowDrills]=useState(true);
   const[showConfig,setShowConfig]=useState(true);
   const[showStats,setShowStats]=useState(false);
+  const[statsScope,setStatsScope]=useState("drill");
   const[statsRefresh,setStatsRefresh]=useState(0);
   const inputRef=useRef(null);
   const fbRef=useRef(null);
@@ -385,6 +674,8 @@ export default function StenoTrainer(){
   const sentenceIndexRef=useRef(INITIAL_SENTENCE_INDEX);
   const wordIndexRef=useRef(0);
   const wordsLengthRef=useRef(0);
+  const wordStartedAtRef=useRef(Date.now());
+  const wordWrongOutputsRef=useRef([]);
   const renderCountRef=useRef(0);
   renderCountRef.current+=1;
 
@@ -455,6 +746,8 @@ export default function StenoTrainer(){
       setSessionStarted(false);
       setElapsedSeconds(0);
       sessionStartRef.current=null;
+      wordStartedAtRef.current=Date.now();
+      wordWrongOutputsRef.current=[];
       setFb(null);
       if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;
     };
@@ -490,6 +783,8 @@ export default function StenoTrainer(){
     pendingAdvanceRef.current=false;
     const offset=inputRef.current?inputRef.current.value.length:0;
     wordStartOffsetRef.current=offset;
+    wordStartedAtRef.current=Date.now();
+    wordWrongOutputsRef.current=[];
     debugLog("word change",{
       sentenceIndex:si,
       wordIndex:wi,
@@ -516,6 +811,10 @@ export default function StenoTrainer(){
     const expected=data.cumulativePrefixOutputs[prev];
     const normalized=currentOutput.trim().toLowerCase();
     const matches=expected==null?true:normalized===expected.toLowerCase();
+    const trackWrongOutput=()=>{
+      if(wordIndexRef.current===0)return;
+      wordWrongOutputsRef.current.push(currentOutput);
+    };
 
     debugLog("stroke",{
       word:data.word,
@@ -543,6 +842,17 @@ export default function StenoTrainer(){
         strokeIndexRef.current=0;
         setStrokeIndex(0);
         debugLog("word complete",{word:data.word,finalOutput:currentOutput});
+        if(wordIndexRef.current>0){
+          const drillIndex=sentenceIndexRef.current;
+          saveDrillWordStat({
+            drillName:getSentenceName(drillIndex),
+            sectionTitle:DRILL_ITEMS[drillIndex]?.sectionTitle || "",
+            expectedWord:data.word,
+            elapsedMs:Date.now()-wordStartedAtRef.current,
+            wrongOutputs:wordWrongOutputsRef.current,
+          });
+          setStatsRefresh(v=>v+1);
+        }
         if(wordIndexRef.current+1>=wordsLengthRef.current){
           const drillIndex=sentenceIndexRef.current;
           const elapsed=sessionStartRef.current
@@ -571,6 +881,7 @@ export default function StenoTrainer(){
         const nextAttempts=attemptsRef.current+1;
         attemptsRef.current=nextAttempts;
         debugLog("word wrong",{word:data.word,normalized,expected});
+        trackWrongOutput();
         setHintRevealed(true);
         setFb("wrong");
         setAttempts(nextAttempts);
@@ -589,6 +900,7 @@ export default function StenoTrainer(){
       debugLog("stroke wrong",{reason:"intermediate mismatch"});
       const nextAttempts=attemptsRef.current+1;
       attemptsRef.current=nextAttempts;
+      trackWrongOutput();
       setHintRevealed(true);
       setFb("wrong");
       setAttempts(nextAttempts);
@@ -673,7 +985,9 @@ export default function StenoTrainer(){
   const completedWords=Math.min(wi,words.length);
   const wpm=elapsedSeconds>0?Math.round(completedWords/(elapsedSeconds/60)):0;
   const acc=attempts>0?Math.round(correct/attempts*100):0;
-  const drillStats=getDrillStats(getSentenceName(si));
+  const currentDrillName=getSentenceName(si);
+  const drillStats=getDrillStats(currentDrillName);
+  const topWordStats=getTopWordStats(currentDrillName,statsScope);
   const currentStrokeKeys=curData&&strokeIndex<curData.strokes.length
     ?curData.stenoKeys[strokeIndex]
     :null;
@@ -708,6 +1022,8 @@ export default function StenoTrainer(){
     sessionStartRef.current=null;
     pendingAdvanceRef.current=false;
     strokeIndexRef.current=0;
+    wordStartedAtRef.current=Date.now();
+    wordWrongOutputsRef.current=[];
     if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;
   };
 
@@ -797,11 +1113,12 @@ export default function StenoTrainer(){
 
       {showStats&&(
         <div style={{position:"fixed",inset:0,zIndex:40,background:"rgba(5,7,12,0.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>{setShowStats(false);focusTrainerInput();}}>
-          <div role="dialog" aria-modal="true" aria-label="Drill stats" onClick={e=>e.stopPropagation()} style={{width:"min(420px,100%)",padding:18,borderRadius:8,border:"1px solid var(--surface2)",background:"var(--surface)",boxShadow:"0 24px 70px rgba(0,0,0,0.45)",display:"flex",flexDirection:"column",gap:16}}>
+          <div role="dialog" aria-modal="true" aria-label="Drill stats" onClick={e=>e.stopPropagation()} style={{width:"min(760px,100%)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",padding:18,borderRadius:8,border:"1px solid var(--surface2)",background:"var(--surface)",boxShadow:"0 24px 70px rgba(0,0,0,0.45)",display:"flex",flexDirection:"column",gap:16}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
               <div>
                 <div style={{fontSize:16,fontWeight:800,color:"var(--text)"}}>Stats</div>
                 <div style={{marginTop:4,fontSize:12,color:"var(--text-dim)"}}>{getSentenceName(si)}</div>
+                <div style={{marginTop:3,fontSize:11,color:"var(--text-dim)"}}>First word of each run ignored</div>
               </div>
               <button type="button" onClick={()=>{setShowStats(false);focusTrainerInput();}} style={{width:30,height:30,borderRadius:6,border:"1px solid var(--surface2)",background:"transparent",color:"var(--text-dim)",cursor:"pointer",fontFamily:"inherit",fontSize:16,lineHeight:1}}>×</button>
             </div>
@@ -839,6 +1156,29 @@ export default function StenoTrainer(){
                 <div style={{marginTop:6,fontSize:22,fontWeight:800,color:drillStats.fastestCompletionSeconds>0?"var(--success)":"var(--text-dim)"}}>{formatDuration(drillStats.fastestCompletionSeconds)}</div>
               </div>
             </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",padding:2,borderRadius:6,border:"1px solid var(--surface2)",background:"var(--bg)",gap:2}}>
+              {[
+                {value:"drill",label:"Current drill"},
+                {value:"global",label:"All drills"},
+              ].map((option)=>(
+                <button key={option.value} type="button" onClick={()=>{setStatsScope(option.value);focusTrainerInput();}} style={{minHeight:32,padding:"5px 8px",borderRadius:4,border:"none",background:statsScope===option.value?"var(--accent)":"transparent",color:statsScope===option.value?"#fff":"var(--text-dim)",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:statsScope===option.value?800:600}}>
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <WordStatSection
+              title="Slowest words"
+              subtitle={`Top ${TOP_WORD_STAT_COUNT} by average word time`}
+              words={topWordStats.slowest}
+              emptyText="No word timing recorded yet."
+            />
+            <WordStatSection
+              title="Most failed words"
+              subtitle={`Top ${TOP_WORD_STAT_COUNT} by failure rate`}
+              words={topWordStats.mostFailed}
+              emptyText="No failed words recorded yet."
+            />
+            <WordStatsTable words={topWordStats.all}/>
           </div>
         </div>
       )}
