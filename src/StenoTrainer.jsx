@@ -770,6 +770,7 @@ export default function StenoTrainer(){
   const[showDrills,setShowDrills]=useState(true);
   const[showConfig,setShowConfig]=useState(true);
   const[showStats,setShowStats]=useState(false);
+  const[showLiveStats,setShowLiveStats]=useState(true);
   const[statsScope,setStatsScope]=useState("drill");
   const[statsRange,setStatsRange]=useState(STATS_RANGES.LIFETIME);
   const[statsRefresh,setStatsRefresh]=useState(0);
@@ -788,6 +789,7 @@ export default function StenoTrainer(){
   const wordsLengthRef=useRef(0);
   const wordStartedAtRef=useRef(Date.now());
   const wordWrongOutputsRef=useRef([]);
+  const pendingWordStatsRef=useRef([]);
   const drillRunIdRef=useRef(createDrillRunId());
   const renderCountRef=useRef(0);
   renderCountRef.current+=1;
@@ -861,6 +863,7 @@ export default function StenoTrainer(){
       sessionStartRef.current=null;
       wordStartedAtRef.current=Date.now();
       wordWrongOutputsRef.current=[];
+      pendingWordStatsRef.current=[];
       drillRunIdRef.current=createDrillRunId();
       setFb(null);
       if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;
@@ -958,18 +961,20 @@ export default function StenoTrainer(){
         debugLog("word complete",{word:data.word,finalOutput:currentOutput});
         if(wordIndexRef.current>0){
           const drillIndex=sentenceIndexRef.current;
-          saveDrillWordStat({
+          pendingWordStatsRef.current.push({
             drillName:getSentenceName(drillIndex),
             sectionTitle:DRILL_ITEMS[drillIndex]?.sectionTitle || "",
             expectedWord:data.word,
             elapsedMs:Date.now()-wordStartedAtRef.current,
-            wrongOutputs:wordWrongOutputsRef.current,
+            wrongOutputs:[...wordWrongOutputsRef.current],
             runId:drillRunIdRef.current,
           });
-          setStatsRefresh(v=>v+1);
         }
         if(wordIndexRef.current+1>=wordsLengthRef.current){
           const drillIndex=sentenceIndexRef.current;
+          const pendingWordStats=[...pendingWordStatsRef.current];
+          pendingWordStats.forEach(saveDrillWordStat);
+          pendingWordStatsRef.current=[];
           const elapsed=sessionStartRef.current
             ?Math.floor((Date.now()-sessionStartRef.current)/1000)
             :0;
@@ -988,6 +993,11 @@ export default function StenoTrainer(){
             attempts:nextAttempts,
             completedWords,
             rawSteno:DRILL_ITEMS[drillIndex]?.rawSteno === true,
+          });
+          debugLog("word stats flushed",{
+            sentenceIndex:drillIndex,
+            sentenceName:getSentenceName(drillIndex),
+            count:pendingWordStats.length,
           });
           setStatsRefresh(v=>v+1);
         }
@@ -1140,6 +1150,7 @@ export default function StenoTrainer(){
     strokeIndexRef.current=0;
     wordStartedAtRef.current=Date.now();
     wordWrongOutputsRef.current=[];
+    pendingWordStatsRef.current=[];
     drillRunIdRef.current=createDrillRunId();
     if(inputRef.current)wordStartOffsetRef.current=inputRef.current.value.length;
   };
@@ -1208,6 +1219,7 @@ export default function StenoTrainer(){
               </div>
             </div>
             <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}><input type="checkbox" checked={showFingers} onChange={e=>{setShowFingers(e.target.checked);focusTrainerInput();}} style={{accentColor:"var(--accent)"}}/>Finger map</label>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}><input type="checkbox" checked={showLiveStats} onChange={e=>{setShowLiveStats(e.target.checked);focusTrainerInput();}} style={{accentColor:"var(--accent)"}}/>Live stats</label>
             <label style={{display:"flex",alignItems:"center",gap:8,cursor:"not-allowed",opacity:0.6}}><input type="checkbox" checked={rawStenoMode} disabled style={{accentColor:"var(--accent)"}}/>Raw steno</label>
           </div>
         )}
@@ -1219,9 +1231,13 @@ export default function StenoTrainer(){
       </div>
 
       <div style={{display:"flex",alignItems:"center",gap:24,marginBottom:16,fontSize:13,color:"var(--text-dim)",flexWrap:"wrap",justifyContent:"center"}}>
-        <span>Time <strong style={{color:sessionStarted?"var(--accent)":"var(--text-dim)"}}>{elapsedSeconds}s</strong></span>
-        <span>WPM <strong style={{color:wpm>0?"var(--success)":"var(--text-dim)"}}>{wpm}</strong></span>
-        <span>Accuracy <strong style={{color:acc>=80?"var(--success)":"var(--text-dim)"}}>{acc}%</strong></span>
+        {showLiveStats&&(
+          <>
+            <span>Time <strong style={{color:sessionStarted?"var(--accent)":"var(--text-dim)"}}>{elapsedSeconds}s</strong></span>
+            <span>WPM <strong style={{color:wpm>0?"var(--success)":"var(--text-dim)"}}>{wpm}</strong></span>
+            <span>Accuracy <strong style={{color:acc>=80?"var(--success)":"var(--text-dim)"}}>{acc}%</strong></span>
+          </>
+        )}
         <div style={{display:"flex",gap:8}}>
           <button type="button" onClick={restartSession} style={{padding:"4px 10px",borderRadius:4,border:"1px solid var(--surface2)",background:"var(--surface)",color:"var(--text)",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Restart</button>
           <button type="button" onClick={()=>{setShowStats(true);focusTrainerInput();}} style={{padding:"4px 2px",border:"none",background:"transparent",color:"var(--accent)",cursor:"pointer",fontFamily:"inherit",fontSize:12,textDecoration:"underline"}}>Stats</button>
